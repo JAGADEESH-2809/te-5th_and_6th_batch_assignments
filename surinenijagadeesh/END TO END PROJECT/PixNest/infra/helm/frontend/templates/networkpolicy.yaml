@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicy.enabled }}
+# Only the ingress controller may reach the frontend pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "frontend.fullname" . }}
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "frontend.selectorLabels" . | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        {{- /*
+          Who is allowed to reach these pods depends on the ingress implementation.
+          nginx runs INSIDE the cluster, so it is selected by namespace. An ALB does not: with
+          target-type "ip" the load balancer's own ENIs deliver straight to pod IPs from the VPC,
+          so there is no namespace to match and a namespaceSelector alone silently drops every
+          request, including the ALB health checks.
+        */}}
+        {{- with .Values.networkPolicy.allowFromNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+        {{- with .Values.networkPolicy.allowFromCIDR }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 8080
+{{- end }}

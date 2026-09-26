@@ -1,0 +1,25 @@
+# Overlay for a local minikube run: locally built image, MinIO instead of S3, one replica.
+image:
+  repository: pixnest-backend
+  tag: local
+  pullPolicy: IfNotPresent
+replicas: 1
+serviceAccount:
+  roleArn: ""
+autoscaling:
+  enabled: false # minikube has no metrics-server by default
+env:
+  S3_BUCKET: pixnest-photos
+  AWS_REGION: ap-south-1
+  ENVIRONMENT: local
+extraEnv:
+  - { name: S3_ENDPOINT_URL, value: "http://minio:9000" }
+  - { name: AWS_ACCESS_KEY_ID, value: "minioadmin" }
+  - { name: AWS_SECRET_ACCESS_KEY, value: "minioadmin" }
+# minikube uses the nginx ingress addon, which runs in the cluster, so select it by namespace
+# and drop the VPC CIDR rule that only makes sense for an ALB.
+networkPolicy:
+  allowFromNamespace: ingress-nginx
+  allowFromCIDR: ""
+
+

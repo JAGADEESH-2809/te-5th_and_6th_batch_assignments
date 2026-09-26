@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+data:
+  S3_BUCKET: {{ .Values.env.S3_BUCKET | quote }}
+  AWS_REGION: {{ .Values.env.AWS_REGION | quote }}
+  ENVIRONMENT: {{ .Values.env.ENVIRONMENT | quote }}
+  APP_VERSION: {{ .Values.image.tag | quote }}
+---
+{{- if not .Values.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # Demo defaults. In production set existingSecret to a Secret sourced from a real store
+  # (External Secrets / AWS Secrets Manager) holding both DATABASE_URL and JWT_SECRET.
+  DATABASE_URL: {{ include "backend.databaseUrl" . | quote }}
+  JWT_SECRET: {{ .Values.jwtSecret | quote }}
+{{- end }}

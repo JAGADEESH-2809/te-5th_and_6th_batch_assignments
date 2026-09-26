@@ -1,0 +1,7 @@
+apiVersion: v2
+name: pixnest-postgres
+description: In-cluster PostgreSQL for pixnest - a hardened single-replica StatefulSet with a PersistentVolumeClaim
+type: application
+version: 0.1.0
+appVersion: "16.15"
+

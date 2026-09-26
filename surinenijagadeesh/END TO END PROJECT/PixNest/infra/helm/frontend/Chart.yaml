@@ -1,0 +1,7 @@
+apiVersion: v2
+name: pixnest-frontend
+description: pixnest frontend (React static build on nginx) plus the app Ingress (routes / here and /api to the backend)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

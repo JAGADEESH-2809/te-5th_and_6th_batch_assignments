@@ -1,0 +1,58 @@
+# pixnest-frontend chart values. CI (GitOps) bumps image.tag; Argo CD syncs it.
+# This chart also owns the app Ingress (the frontend is the entry point); /api and /docs
+# route to the backend chart's fixed Service name.
+
+fullnameOverride: "" # defaults to pixnest-frontend
+image:
+  repository: 000000000000.dkr.ecr.ap-south-1.amazonaws.com/pixnest-frontend
+  tag: 31c34566ed161c774fe988a64d9f2383a7228a25 # CI overwrites this with the git commit SHA
+  pullPolicy: IfNotPresent
+replicas: 2
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+ingress:
+  enabled: true
+  # The AWS Load Balancer Controller provisions a real Application Load Balancer from this
+  # Ingress. minikube has no such controller, so values-local.yaml switches back to nginx.
+  className: alb
+  host: "" # optional hostname; empty = match any host
+  # The template picks ONE of these two sets based on className above. They are kept apart
+  # because Helm merges maps across values files, which would otherwise leave each environment
+  # carrying the other's dead annotations.
+  albAnnotations:
+    # Public ALB. Use "internal" for a VPC-only load balancer.
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    # Register pod IPs directly as targets instead of node ports. Needs the VPC CNI, which we
+    # run, and removes the extra kube-proxy hop on every request.
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # Both Services answer on "/", so one health check setting covers every target group.
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    # Every Ingress sharing a group name lands on ONE ALB. Without this each Ingress provisions
+    # its own load balancer, which gets expensive quickly.
+    alb.ingress.kubernetes.io/group.name: pixnest
+    # TLS is the next step: add a certificate-arn, a 443 listener, and an HTTP->HTTPS redirect.
+  nginxAnnotations:
+    # Local only. nginx caps request bodies at 1m by default, which would 413 a normal photo
+    # upload before FastAPI ever sees it. The ALB has no equivalent limit.
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+  # Route /docs and /openapi.json to the backend too. Handy for demos; OFF in production.
+  exposeDocs: true
+  # The backend chart's fixed Service name/port (cross-chart convention).
+  backendService:
+    name: pixnest-backend
+    port: 8000
+networkPolicy:
+  enabled: true
+  # See the backend chart: the ALB reaches pod IPs from the VPC, not from a namespace.
+  allowFromCIDR: "10.0.0.0/16" # the dev VPC CIDR; prod uses 10.1.0.0/16
+  allowFromNamespace: ""
+podDisruptionBudget:
+  enabled: true
+
+

@@ -1,0 +1,61 @@
+{{- if .Values.ingress.enabled }}
+# The app's single entry point: / serves the SPA, /api (and optionally /docs) goes to the
+# backend chart's Service (fixed name, cross-chart convention).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pixnest
+  labels:
+    {{- include "frontend.labels" . | nindent 4 }}
+  {{- /*
+    Annotations are picked by ingress class, not merged. Helm deep-merges maps across values
+    files, so a single `annotations:` block would leave the local nginx run carrying dead alb.*
+    keys and vice versa. Selecting one set keeps each rendering honest.
+  */}}
+  {{- $ann := ternary .Values.ingress.albAnnotations .Values.ingress.nginxAnnotations (eq .Values.ingress.className "alb") }}
+  {{- with $ann }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backendService.name }}
+                port:
+                  number: {{ .Values.ingress.backendService.port }}
+          {{- if .Values.ingress.exposeDocs }}
+          # Swagger for demos. Disabled in production (values-eks sets exposeDocs: false).
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backendService.name }}
+                port:
+                  number: {{ .Values.ingress.backendService.port }}
+          - path: /openapi.json
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.ingress.backendService.name }}
+                port:
+                  number: {{ .Values.ingress.backendService.port }}
+          {{- end }}
+          # Everything else is the React app.
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "frontend.fullname" . }}
+                port:
+                  number: 80
+{{- end }}
+

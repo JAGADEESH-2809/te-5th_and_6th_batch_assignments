@@ -1,0 +1,7 @@
+apiVersion: v2
+name: pixnest-backend
+description: pixnest backend API (FastAPI) - photos in S3 via Pod Identity, metadata in Postgres, self-issued JWT auth
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

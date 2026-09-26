@@ -1,0 +1,14 @@
+{{- if and .Values.podDisruptionBudget.enabled (or .Values.autoscaling.enabled (ge (int .Values.replicas) 2)) }}
+# Keep at least one backend up during voluntary disruptions (node drains, upgrades).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "backend.fullname" . }}
+  labels:
+    {{- include "backend.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "backend.selectorLabels" . | nindent 6 }}
+{{- end }}

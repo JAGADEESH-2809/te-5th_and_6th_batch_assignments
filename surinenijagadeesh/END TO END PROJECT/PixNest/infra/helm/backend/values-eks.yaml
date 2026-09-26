@@ -1,0 +1,15 @@
+# Overlay for the EKS deploy (account 359367063384, ap-south-1).
+# Pod->S3 auth comes from EKS Pod Identity (no SA annotation). Production secrets should move
+# to existingSecret (External Secrets / AWS Secrets Manager).
+image:
+  repository: 359367063384.dkr.ecr.ap-south-1.amazonaws.com/pixnest-backend
+  # Deliberately NO tag here. values.yaml carries the tag and CI rewrites it to the git SHA on
+  # every push (the GitOps bump). A tag in this overlay would override that and pin the
+  # deployment to one image forever - and since ECR tags are immutable and CI only ever pushes
+  # SHAs, a hand-written tag like "v1" can never exist, so every pod lands in ImagePullBackOff.
+env:
+  S3_BUCKET: "pixnest-photos-359367063384"
+  AWS_REGION: ap-south-1
+  ENVIRONMENT: production
+
+

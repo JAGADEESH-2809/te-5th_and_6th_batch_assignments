@@ -1,0 +1,60 @@
+# pixnest-backend chart values. CI (GitOps) bumps image.tag; Argo CD syncs it.
+# Cross-chart wiring uses FIXED service names: this chart is "pixnest-backend",
+# Postgres is reached at "pixnest-postgres" (the postgres chart), and the frontend
+# chart's Ingress routes /api here.
+
+fullnameOverride: "" # defaults to pixnest-backend
+image:
+  repository: 000000000000.dkr.ecr.ap-south-1.amazonaws.com/pixnest-backend
+  tag: 31c34566ed161c774fe988a64d9f2383a7228a25 # CI overwrites this with the git commit SHA
+  pullPolicy: IfNotPresent
+replicas: 2
+serviceAccount:
+  name: pixnest-backend
+  # Pod->S3 auth is EKS Pod Identity by default (bound in Terraform, no annotation here).
+  # Set roleArn only to use the legacy IRSA annotation instead.
+  roleArn: ""
+# Non-secret config -> ConfigMap.
+env:
+  S3_BUCKET: pixnest-photos
+  AWS_REGION: ap-south-1
+  ENVIRONMENT: production
+# Postgres coordinates (must match the postgres chart's values). Used to build DATABASE_URL
+# unless databaseUrl or existingSecret is set. Demo credentials - production uses
+# existingSecret sourced from External Secrets / AWS Secrets Manager.
+database:
+  host: pixnest-postgres
+  port: 5432
+  username: pixnest
+  password: pixnest
+  name: pixnest
+# Secret resolution order: existingSecret (must hold DATABASE_URL + JWT_SECRET) ->
+# databaseUrl -> built from the database section above.
+existingSecret: ""
+databaseUrl: ""
+# Signs the app's self-issued JWTs. Demo default only.
+jwtSecret: "dev-only-change-me"
+# Extra environment variables (e.g. local MinIO: S3_ENDPOINT_URL + static keys).
+extraEnv: []
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+networkPolicy:
+  enabled: true
+  # Defaults target the ALB: it delivers from its own ENIs in the VPC, so allow the VPC range.
+  # values-local.yaml swaps these for a namespace selector, because nginx runs in the cluster.
+  allowFromCIDR: "10.0.0.0/16" # the dev VPC CIDR; prod uses 10.1.0.0/16
+  allowFromNamespace: ""
+podDisruptionBudget:
+  enabled: true
+
+

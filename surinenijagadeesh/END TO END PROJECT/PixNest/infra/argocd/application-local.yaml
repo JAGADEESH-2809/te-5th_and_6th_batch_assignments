@@ -1,0 +1,26 @@
+# App-of-apps root for the LOCAL minikube demo: watches infra/argocd/apps-local/, which uses
+# the values-local overlays (locally built images, MinIO). MinIO itself comes from
+# infra/local/local-deps.yaml (applied with kubectl, outside GitOps).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pixnest-local
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:JAGADEESH-2809/te-5th_and_6th_batch_assignments.git
+    targetRevision: main
+    path: infra/argocd/apps-local
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+
+

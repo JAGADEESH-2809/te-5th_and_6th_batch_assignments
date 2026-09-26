@@ -1,0 +1,17 @@
+# Overlay for a local minikube run: locally built image, one replica.
+image:
+  repository: pixnest-frontend
+  tag: local
+  pullPolicy: IfNotPresent
+replicas: 1
+# minikube has no AWS Load Balancer Controller, so the local run uses the nginx ingress addon.
+# This is the ONLY place nginx survives; everything on EKS goes through the ALB. Switching the
+# class is enough - the template then selects nginxAnnotations instead of albAnnotations.
+ingress:
+  className: nginx
+# minikube uses the nginx ingress addon, which runs in the cluster, so select it by namespace
+# and drop the VPC CIDR rule that only makes sense for an ALB.
+networkPolicy:
+  allowFromNamespace: ingress-nginx
+  allowFromCIDR: ""
+

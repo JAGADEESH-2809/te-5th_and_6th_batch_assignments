@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pixnest-backend
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1" # after the database
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:JAGADEESH-2809/te-5th_and_6th_batch_assignments.git
+    targetRevision: main
+    path: infra/helm/backend
+    helm:
+      valueFiles:
+        - values.yaml
+        - values-local.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: pixnest
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+
+

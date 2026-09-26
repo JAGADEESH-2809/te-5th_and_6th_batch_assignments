@@ -1,0 +1,4 @@
+# Overlay for the EKS deploy: a bigger EBS-backed volume. (The EBS CSI driver provides the
+# default StorageClass; the volume pins the pod to one AZ.)
+storage:
+  size: 20Gi

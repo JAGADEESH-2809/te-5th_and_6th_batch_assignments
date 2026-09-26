@@ -1,0 +1,31 @@
+# pixnest-postgres chart values. The backend chart connects to the fixed Service name
+# "pixnest-postgres" with the credentials below (they must match the backend chart's
+# database section). Trade-off to teach: running a DB in-cluster means you own backups/HA;
+# production-grade options are CloudNativePG or managed RDS/Aurora.
+
+fullnameOverride: "" # defaults to pixnest-postgres
+
+image: postgres:16.15 # pinned minor - a mutable "16" tag can silently change under you
+
+auth:
+  username: pixnest
+  password: pixnest # demo default; use a real secret store in production
+  database: pixnest
+
+storage:
+  size: 5Gi
+  storageClassName: "" # "" = cluster default (standard on minikube, EBS CSI on EKS)
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+networkPolicy:
+  enabled: true
+  # Only pods with this app name label (the backend chart) may reach 5432.
+  allowFromApp: pixnest-backend
+

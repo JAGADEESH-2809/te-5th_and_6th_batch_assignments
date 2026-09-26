@@ -1,0 +1,82 @@
+# OPTIONAL overlay: expose the Argo CD UI on a public ALB.
+#
+# NOT the default, and NOT safe to use as written. Read this before enabling it.
+#
+#   helm upgrade --install argocd argo/argo-cd -n argocd --create-namespace #     --version 10.9.0 #     -f infra/platform/argocd/values.yaml #     -f infra/platform/argocd/values-alb-ingress.yaml --wait
+#
+# Why this is not the default:
+#
+#   1. SECURITY. The listener below is plain HTTP on a public load balancer, so the admin
+#      password crosses the internet in cleartext at every login - and that account holds
+#      cluster-admin plus a GitHub token with write access to the repo. ALB DNS names are not
+#      secret, and the login page is reachable by anyone who finds one.
+#   2. COST. An Application Load Balancer is about $0.0225/hour, roughly $16 a month. This one
+#      cannot share the app's ALB, because both serve path "/" with no hostname to tell them
+#      apart, so enabling it doubles the load balancer bill.
+#
+# The free and safe alternative, which the default values.yaml uses:
+#
+#   kubectl -n argocd port-forward svc/argocd-server 8080:80   # http://localhost:8080
+#
+# Before turning this on, all four should be true:
+#   - an ACM certificate for a real hostname
+#   - an HTTPS listener plus an HTTP->HTTPS redirect
+#   - scheme restricted to your office or VPN CIDR, not the whole internet
+#   - ideally SSO in front of it rather than the local admin account
+#
+# Every setting below exists to prevent a specific failure. See docs/INGRESS-AND-ALB.md.
+
+global:
+  # The chart defaults this to "argocd.example.com" and uses it as the Ingress host. A host rule
+  # only matches requests carrying that Host header, so browsing the load balancer's own DNS name
+  # would 404. Empty means the rule matches ANY host, which is what you want before DNS exists.
+  domain: ""
+
+configs:
+  params:
+    # Serve plain HTTP inside the cluster and let the ALB be the edge. Without this argocd-server
+    # serves HTTPS with a self-signed certificate, a plain HTTP health check gets a TLS error,
+    # and every target stays unhealthy.
+    server.insecure: true
+
+server:
+  ingress:
+    enabled: true
+
+    # MUST be "generic", not "aws".
+    #
+    # controller: aws makes the chart add a second, gRPC route for the Argo CD CLI, with a target
+    # group whose protocol-version is GRPC. An ALB only supports gRPC target groups behind an
+    # HTTPS listener, so on an HTTP-only listener the controller fails every reconcile with:
+    #
+    #   InvalidLoadBalancerAction: Listener protocol 'HTTP' is not supported with a target group
+    #   with the protocol-version 'GRPC'
+    #
+    # and the Ingress never gets an address. Use "aws" once you have a certificate and an HTTPS
+    # listener; until then the web UI works and the CLI falls back to HTTP/1.
+    controller: generic
+
+    ingressClassName: alb
+    path: /
+    pathType: Prefix
+
+    annotations:
+      # internet-facing, not internal. An internal ALB has only private IPs and is unreachable
+      # from a laptop, which looks identical to a broken deployment.
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+      # Argo CD's own liveness endpoint. The default "/" redirects, which fails the health check.
+      alb.ingress.kubernetes.io/healthcheck-path: /healthz
+
+      # Its OWN group, deliberately NOT the app's "pixnest" group.
+      #
+      # Ingresses sharing a group land on one ALB, which is the cheap option - but both Argo CD
+      # and the app serve path "/" with no hostname to tell them apart, so sharing would make two
+      # rules collide and route unpredictably. Separate groups means a second ALB and a second
+      # hourly charge. To get back to one, give each a real hostname and share the group.
+      #
+      # Cheapest option of all: skip the Ingress entirely and use
+      #   kubectl -n argocd port-forward svc/argocd-server 8080:80
+      alb.ingress.kubernetes.io/group.name: argocd
+

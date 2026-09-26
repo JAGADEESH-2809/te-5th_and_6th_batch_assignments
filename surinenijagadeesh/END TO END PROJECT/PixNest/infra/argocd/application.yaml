@@ -1,0 +1,26 @@
+# App-of-apps root for EKS: Argo CD watches infra/argocd/apps/, which holds one Application
+# per chart (postgres -> backend -> frontend, ordered by sync-wave). Apply THIS one manifest;
+# Argo manages the rest from Git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pixnest
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:JAGADEESH-2809/te-5th_and_6th_batch_assignments.git
+    targetRevision: main
+    path: infra/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
+
+

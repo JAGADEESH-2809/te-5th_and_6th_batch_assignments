@@ -1,0 +1,20 @@
+# Default StorageClass for the cluster.
+#
+# Why this file exists: EKS still ships a legacy "gp2" StorageClass that uses the in-tree
+# provisioner kubernetes.io/aws-ebs, which was REMOVED in Kubernetes 1.31+. On a 1.31+ cluster
+# any PVC using it stays Pending forever ("unbound immediate PersistentVolumeClaims"). The
+# modern driver is the EBS CSI addon (ebs.csi.aws.com), and gp3 is cheaper and faster than gp2.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Delete
+# Wait for the pod to be scheduled before provisioning, so the EBS volume lands in the same AZ.
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true

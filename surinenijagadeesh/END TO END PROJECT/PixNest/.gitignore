@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+# Per-environment tfvars are non-secret config and ARE committed.
+!infra/terraform/environments/**/terraform.tfvars
+# The provider lock file IS committed (reproducible provider versions on laptop and pipeline).
+!.terraform.lock.hcl
+# Misc
+.DS_Store
+*.log
+
+# Test artifacts
+.coverage
+htmlcov/
+
+# Instructor-only material - kept on disk, never committed.
+docs/TEACHING-GUIDE.md
+docs/PRODUCTION-READINESS.md
+infra/DEMO-RUNBOOK.md
+
+# SSH keys. Following the deploy-key steps in docs/GIT-REPO-ACCESS.md creates a keypair in
+# whatever directory you are standing in - often the repo root. A stray `git add -A` would then
+# commit the PRIVATE half. Never let that be possible.
+*_deploy_key
+*_deploy_key.pub
+*_key
+*_key.pub
+id_rsa
+id_ed25519
+*.pem
+# Environment files
+.env
+.env.*
+!.env.example
