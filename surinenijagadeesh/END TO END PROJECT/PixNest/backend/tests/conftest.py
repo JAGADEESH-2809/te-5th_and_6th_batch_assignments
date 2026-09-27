@@ -21,7 +21,10 @@ from moto import mock_aws  # noqa: E402
 @pytest.fixture(scope="module")
 def client():
     with mock_aws():
-        boto3.client("s3", region_name="ap-south-1").create_bucket(Bucket="test-bucket")
+        boto3.client("s3", region_name="ap-south-1").create_bucket(
+            Bucket="test-bucket",
+            CreateBucketConfiguration={"LocationConstraint": "ap-south-1"},
+        )
         from app.main import app  # imported here so env is already set
 
         with TestClient(app) as c:  # context form runs the lifespan (creates tables)
