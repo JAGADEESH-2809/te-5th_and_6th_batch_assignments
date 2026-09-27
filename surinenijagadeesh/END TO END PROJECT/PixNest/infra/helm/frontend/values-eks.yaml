@@ -1,7 +1,7 @@
-# Overlay for the EKS deploy (account 359367063384, ap-south-1).
+# Overlay for the EKS deploy (account 258233813982, ap-south-1).
 # Ingress is an ALB, provisioned by the AWS Load Balancer Controller from the base values.
 image:
-  repository: 359367063384.dkr.ecr.ap-south-1.amazonaws.com/pixnest-frontend
+  repository: 258233813982.dkr.ecr.ap-south-1.amazonaws.com/pixnest-frontend
 ingress:
   exposeDocs: false # no public Swagger in production
 
