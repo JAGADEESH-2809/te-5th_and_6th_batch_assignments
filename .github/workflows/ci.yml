@@ -13,13 +13,20 @@ run-name: >-
 on:
   push:
     branches: [main]
-    paths: ["surinenijagadeesh/END TO END PROJECT/PixNest/backend/**", "surinenijagadeesh/END TO END PROJECT/PixNest/frontend/**", "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/**", ".github/workflows/ci.yml"]
+    paths:
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/backend/**"
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/frontend/**"
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/**"
+      - ".github/workflows/ci.yml"
+
   pull_request:
     branches: [main]
-    paths: ["surinenijagadeesh/END TO END PROJECT/PixNest/backend/**", "surinenijagadeesh/END TO END PROJECT/PixNest/frontend/**", "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/**"]
-  # Manual run. Defaults to rebuilding everything, which is the case that matters: after a
-  # teardown the ECR repositories are empty and no code has changed, so path detection would
-  # correctly find nothing to do and leave you with no images.
+    paths:
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/backend/**"
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/frontend/**"
+      - "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/**"
+
+  # Manual run. Defaults to rebuilding everything.
   workflow_dispatch:
     inputs:
       rebuild:
@@ -39,6 +46,7 @@ permissions:
   contents: read
 
 jobs:
+
   # ---------------------------------------------------------------------------
   # Work out what actually changed, so a frontend edit does not rebuild and
   # redeploy the backend. Every downstream job keys off these outputs.
@@ -46,23 +54,22 @@ jobs:
   changes:
     name: what changed
     runs-on: ubuntu-latest
+
     # On a pull_request, paths-filter asks the GitHub API which files the PR touches rather
-    # than diffing locally, and that needs pull-requests: read. The workflow default is
-    # contents: read only, so without this the job fails with
-    # "Resource not accessible by integration". Push and dispatch are unaffected, which is
-    # why this only shows up on the first PR.
+    # than diffing locally, and that needs pull-requests: read.
     permissions:
       contents: read
       pull-requests: read
+
     outputs:
       backend: ${{ steps.decide.outputs.backend }}
       frontend: ${{ steps.decide.outputs.frontend }}
       charts: ${{ steps.decide.outputs.charts }}
+
     steps:
       - uses: actions/checkout@v7
 
-      # Only meaningful for push and pull_request, where the event carries a "before" commit
-      # to diff against. See the note on the next step.
+      # Only meaningful for push and pull_request.
       - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name != 'workflow_dispatch'
@@ -76,11 +83,7 @@ jobs:
               - 'surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/**'
               - 'surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/**'
 
-      # The path filter CANNOT be trusted on a manual run. A workflow_dispatch event carries no
-      # "before" commit, so the action falls back to inspecting the last commit on a shallow
-      # checkout - where git reports EVERY file as added - and concludes that everything changed.
-      # That silently overrode the rebuild choice. So on a dispatch the chosen input decides,
-      # and the filter is used only where a real "before" exists.
+      # The path filter cannot be trusted on a manual run.
       - name: Decide what to build
         id: decide
         env:
@@ -91,23 +94,44 @@ jobs:
           F_CHARTS: ${{ steps.filter.outputs.charts }}
         run: |
           set -euo pipefail
+
           if [ "$EVENT" = "workflow_dispatch" ]; then
             case "$REBUILD" in
-              all)      BE=true;  FE=true;  CH=true  ;;
-              backend)  BE=true;  FE=false; CH=false ;;
-              frontend) BE=false; FE=true;  CH=false ;;
-              *)        echo "::error::unknown rebuild option '$REBUILD'"; exit 1 ;;
+              all)
+                BE=true
+                FE=true
+                CH=true
+                ;;
+              backend)
+                BE=true
+                FE=false
+                CH=false
+                ;;
+              frontend)
+                BE=false
+                FE=true
+                CH=false
+                ;;
+              *)
+                echo "::error::unknown rebuild option '$REBUILD'"
+                exit 1
+                ;;
             esac
+
             SOURCE="manual choice: $REBUILD"
           else
-            BE="$F_BACKEND"; FE="$F_FRONTEND"; CH="$F_CHARTS"
+            BE="$F_BACKEND"
+            FE="$F_FRONTEND"
+            CH="$F_CHARTS"
             SOURCE="changed paths"
           fi
+
           {
             echo "backend=$BE"
             echo "frontend=$FE"
             echo "charts=$CH"
           } >> "$GITHUB_OUTPUT"
+
           {
             echo "### What will be built"
             echo
@@ -115,70 +139,91 @@ jobs:
             echo
             echo "| component | build |"
             echo "|-----------|-------|"
-            echo "| backend  | $BE |"
-            echo "| frontend | $FE |"
-            echo "| charts   | $CH |"
+            echo "| backend   | $BE |"
+            echo "| frontend  | $FE |"
+            echo "| charts    | $CH |"
           } >> "$GITHUB_STEP_SUMMARY"
+
 
   backend-test:
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v7
+
       - name: Install uv
         uses: astral-sh/setup-uv@v10.1.0
         with:
           version: "0.12.10"
+
       - name: Sync deps (from the lockfile)
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/backend
         run: uv sync --frozen
+
       - name: Lint
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/backend
         run: uv run ruff check . && uv run ruff format --check .
+
       - name: Test (with coverage gate)
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/backend
         run: uv run pytest -q --cov=app --cov-fail-under=80
+
 
   frontend-build:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: surinenijagadeesh/END TO END PROJECT/PixNest/frontend/package-lock.json
+
       - name: Install
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/frontend
         run: npm ci
+
       - name: Build
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/frontend
         run: npm run build
 
-  # Charts and Terraform are validated together: both are "how it deploys", and neither
-  # needs cloud credentials to check.
+
+  # Charts and Terraform are validated together.
   lint-infra:
     needs: changes
     if: needs.changes.outputs.charts == 'true'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v7
+
       - uses: azure/setup-helm@v5
+
       - name: Helm lint + render (all three charts, base + overlays)
         run: |
           for chart in postgres backend frontend; do
             helm lint "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart"
             helm template "pixnest-$chart" "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart" >/dev/null
+
             for overlay in values-local.yaml values-eks.yaml; do
               if [ -f "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart/$overlay" ]; then
-                helm template "pixnest-$chart" "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart" -f "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart/$overlay" >/dev/null
+                helm template \
+                  "pixnest-$chart" \
+                  "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart" \
+                  -f "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/$chart/$overlay" \
+                  >/dev/null
               fi
             done
           done
+
       - uses: hashicorp/setup-terraform@v4
+
       - name: Terraform fmt + validate (dev env root)
         working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/dev
         run: |
@@ -186,15 +231,13 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+
   # ---------------------------------------------------------------------------
   # Build, scan and push ONLY the images whose source changed.
-  #
-  # The `if` looks fussy but has to be. A skipped `needs` job would normally skip this one
-  # too, so always() is required - and once always() is on, the failure cases have to be
-  # re-stated by hand, or a failed test would no longer block the push.
   # ---------------------------------------------------------------------------
   images:
     needs: [changes, backend-test, frontend-build, lint-infra]
+
     if: >-
       always()
       && !cancelled()
@@ -206,20 +249,26 @@ jobs:
       && vars.AWS_ACCOUNT_ID != ''
       && vars.AWS_REGION != ''
       && vars.AWS_GHA_ROLE_ARN != ''
+
     runs-on: ubuntu-latest
+
     permissions:
       contents: read
-      id-token: write # keyless auth to AWS via OIDC
+      id-token: write
+
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+
     steps:
       - uses: actions/checkout@v7
+
       - name: Configure AWS credentials (OIDC, no static keys)
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_GHA_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
       - name: Log in to ECR
         uses: aws-actions/amazon-ecr-login@v2
 
@@ -230,6 +279,7 @@ jobs:
           context: ./surinenijagadeesh/END TO END PROJECT/PixNest/backend
           load: true
           tags: ${{ env.REGISTRY }}/pixnest-backend:${{ github.sha }}
+
       - name: Build frontend image (local)
         if: needs.changes.outputs.frontend == 'true'
         uses: docker/build-push-action@v7
@@ -238,71 +288,107 @@ jobs:
           load: true
           tags: ${{ env.REGISTRY }}/pixnest-frontend:${{ github.sha }}
 
-      # Trivy from Aqua's official apt repo (the action's release-binary download is flaky
-      # on shared runners). Gate: fail on fixable CRITICAL/HIGH CVEs BEFORE anything is pushed.
+      # Trivy from Aqua's official apt repo.
       - name: Install Trivy
         run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list >/dev/null
-          sudo apt-get update -qq && sudo apt-get install -y -qq trivy
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list >/dev/null
+
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq trivy
+
       - name: Scan backend image (gate on CRITICAL/HIGH)
         if: needs.changes.outputs.backend == 'true'
-        run: trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$REGISTRY/pixnest-backend:$GITHUB_SHA"
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "$REGISTRY/pixnest-backend:$GITHUB_SHA"
+
       - name: Scan frontend image (gate on CRITICAL/HIGH)
         if: needs.changes.outputs.frontend == 'true'
-        run: trivy image --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 "$REGISTRY/pixnest-frontend:$GITHUB_SHA"
+        run: |
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "$REGISTRY/pixnest-frontend:$GITHUB_SHA"
 
-      # Pushes come after BOTH scans, so a failing scan never leaves one image shipped
-      # and the other blocked.
+      # Pushes come after BOTH scans.
       - name: Push backend image
         if: needs.changes.outputs.backend == 'true'
         run: docker push "$REGISTRY/pixnest-backend:$GITHUB_SHA"
+
       - name: Push frontend image
         if: needs.changes.outputs.frontend == 'true'
         run: docker push "$REGISTRY/pixnest-frontend:$GITHUB_SHA"
 
+
   # ---------------------------------------------------------------------------
-  # GitOps handoff: write the new tags into Helm values and commit. Argo CD deploys.
-  #
-  # Bumps ONLY what was pushed. Bumping both in lockstep would point a chart at an image
-  # tag that was never built for this commit, and those pods would sit in ImagePullBackOff.
+  # GitOps handoff: write the new tags into Helm values and commit.
   # ---------------------------------------------------------------------------
   gitops-bump:
     needs: [changes, images]
-    # always() for the same reason as the images job, and it is subtler here: "skipped" is
-    # TRANSITIVE through needs. images depends on frontend-build and lint-infra, so a
-    # backend-only change skips those, and without always() this job inherits the skip even
-    # though images itself succeeded. That silently strands a pushed image with no tag bump.
+
     if: always() && !cancelled() && needs.images.result == 'success'
+
     runs-on: ubuntu-latest
+
     permissions:
-      contents: write # the only job that writes to the repo
+      contents: write
+
     steps:
       - uses: actions/checkout@v7
-      -      - name: Bump the image tags that were actually pushed
+
+      - name: Bump the image tags that were actually pushed
         run: |
-          CHANGED_FILES=()
+          CHANGED=""
+
           if [ "${{ needs.changes.outputs.backend }}" = "true" ]; then
-            yq -i '.image.tag = "${{ github.sha }}"' "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
-            CHANGED_FILES+=("surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml")
+            yq -i '.image.tag = "${{ github.sha }}"' \
+              "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
+
+            CHANGED="$CHANGED surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
           fi
+
           if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
-            yq -i '.image.tag = "${{ github.sha }}"' "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
-            CHANGED_FILES+=("surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml")
+            yq -i '.image.tag = "${{ github.sha }}"' \
+              "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
+
+            CHANGED="$CHANGED surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
           fi
-          printf '%s\n' "${CHANGED_FILES[@]}" > changed_files.txt
+
+          echo "CHANGED_FILES=$CHANGED" >> "$GITHUB_ENV"
 
       - name: Commit the bump
         run: |
-          [ -s changed_files.txt ] || { echo "nothing to bump"; exit 0; }
+          [ -n "$CHANGED_FILES" ] || { echo "nothing to bump"; exit 0; }
+
           git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
-          while IFS= read -r file; do
-            git add -- "$file"
-          done < changed_files.txt
-          git commit -m "ci: deploy ${GITHUB_SHA::7} [skip ci]" || { echo "no changes"; exit 0; }
+
+          if [ "${{ needs.changes.outputs.backend }}" = "true" ]; then
+            git add -- "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
+          fi
+
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
+            git add -- "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
+          fi
+
+          # [skip ci] so this bump to infra/helm does not trigger another CI run (no loop).
+          git commit -m "ci: deploy ${GITHUB_SHA::7} [skip ci]" || {
+            echo "no changes"
+            exit 0
+          }
+
+          # main may have moved while this run was in flight; rebase and retry.
           for attempt in 1 2 3; do
             git push && exit 0
             git pull --rebase origin main
           done
+
           git push
