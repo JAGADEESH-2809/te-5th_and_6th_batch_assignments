@@ -12,7 +12,7 @@ spec:
   source:
     repoURL: git@github.com:JAGADEESH-2809/te-5th_and_6th_batch_assignments.git
     targetRevision: main
-    path: infra/helm/frontend
+    path: surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend
     helm:
       valueFiles:
         - values.yaml

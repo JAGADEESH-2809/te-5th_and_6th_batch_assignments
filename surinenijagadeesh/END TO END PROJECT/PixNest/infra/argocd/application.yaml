@@ -13,7 +13,7 @@ spec:
   source:
     repoURL: git@github.com:JAGADEESH-2809/te-5th_and_6th_batch_assignments.git
     targetRevision: main
-    path: infra/argocd/apps
+    path: surinenijagadeesh/END TO END PROJECT/PixNest/infra/argocd/apps
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
