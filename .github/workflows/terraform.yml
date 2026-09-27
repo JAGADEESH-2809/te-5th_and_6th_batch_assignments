@@ -1,0 +1,385 @@
+name: terraform
+
+# The run title in the Actions list, so plan / apply / destroy and dev / prod are distinguishable
+# at a glance instead of every run just reading "terraform".
+run-name: >-
+  terraform ${{ inputs.action || (github.event_name == 'pull_request' && 'plan' || 'apply') }}
+  · ${{ inputs.environment || (github.event_name == 'pull_request' && 'dev + prod' || 'dev') }}
+  · @${{ github.actor }}
+
+# IaC pipeline. Auth to AWS is keyless via GitHub OIDC; state lives in the S3 backend.
+#
+#   pull request  -> plan BOTH environments (a module change can break prod as easily as dev)
+#   push to main  -> plan + apply dev only (continuous delivery to the demo environment)
+#   dispatch      -> the chosen environment and action; prod apply/destroy waits for approval
+#
+# Every apply consumes the exact plan artifact produced earlier in the same run, so what is
+# applied is byte-for-byte what was reviewed - the world cannot shift between plan and apply.
+on:
+  push:
+    branches: [main]
+    # The negated pattern keeps README edits under surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform from triggering a full apply.
+    paths: ["surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/**", "!surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/**/*.md", ".github/workflows/terraform.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/**", "!surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/**/*.md"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to act on"
+        type: choice
+        default: dev
+        options: [dev, prod]
+      action:
+        description: "plan is always safe; apply and destroy change real infrastructure"
+        type: choice
+        default: plan
+        options: [plan, apply, destroy]
+      confirm:
+        description: "Type the environment name to confirm. Required for any destroy, and for applying to prod."
+        type: string
+        default: ""
+
+# Never cancel a run mid-apply, and never let two runs touch one environment's state at once.
+concurrency:
+  group: terraform-${{ inputs.environment || 'all' }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "1"
+  # State locking: wait rather than fail if another run holds the lock. Scoped per command -
+  # a bare TF_CLI_ARGS would pass the flag to fmt and validate too, which reject it.
+  TF_CLI_ARGS_plan: "-lock-timeout=5m"
+  TF_CLI_ARGS_apply: "-lock-timeout=5m"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Work out what this run should do, in one place, so no other job repeats the logic.
+  # ---------------------------------------------------------------------------
+  setup:
+    name: decide
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.decide.outputs.environments }}
+      target: ${{ steps.decide.outputs.target }}
+      action: ${{ steps.decide.outputs.action }}
+    steps:
+      - id: decide
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_ENV: ${{ inputs.environment }}
+          IN_ACTION: ${{ inputs.action }}
+          IN_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request)
+              ENVIRONMENTS='["dev","prod"]'; TARGET=""; ACTION="plan" ;;
+            push)
+              ENVIRONMENTS='["dev"]'; TARGET="dev"; ACTION="apply" ;;
+            workflow_dispatch)
+              ENVIRONMENTS="[\"${IN_ENV}\"]"; ACTION="$IN_ACTION"
+              if [ "$ACTION" = "plan" ]; then TARGET=""; else TARGET="$IN_ENV"; fi ;;
+            *)
+              echo "::error::unsupported event $EVENT"; exit 1 ;;
+          esac
+
+          # A typed confirmation for the operations that are expensive or irreversible: any
+          # destroy, and any apply to prod. The dropdown puts `destroy` one careless click from
+          # `plan`, so the run also has to name what it is about to change.
+          #
+          # This is the approval gate that works on every plan. GitHub's own required-reviewer
+          # rule is better - a second person clicks approve - but on a PRIVATE repo it needs
+          # GitHub Pro or Team. The apply job already references a GitHub Environment, so the
+          # day this repo is on a paid plan, adding reviewers to the `prod` environment gates it
+          # with no change to this file.
+          NEEDS_CONFIRM="no"
+          if [ "$ACTION" = "destroy" ]; then
+            NEEDS_CONFIRM="yes"
+          elif [ "$ACTION" = "apply" ] && [ "$EVENT" = "workflow_dispatch" ] && [ "$IN_ENV" = "prod" ]; then
+            NEEDS_CONFIRM="yes"
+          fi
+          if [ "$NEEDS_CONFIRM" = "yes" ] && [ "$IN_CONFIRM" != "$IN_ENV" ]; then
+            echo "::error::$ACTION on '$IN_ENV' needs the confirm input set to exactly '$IN_ENV'."
+            exit 1
+          fi
+
+          {
+            echo "environments=$ENVIRONMENTS"
+            echo "target=$TARGET"
+            echo "action=$ACTION"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "### terraform \`$ACTION\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Planning: \`$ENVIRONMENTS\`. Applying: \`${TARGET:-nothing}\`." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Plan. Produces the artifact that the apply job later consumes.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: plan · ${{ matrix.environment }}
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC
+      pull-requests: write # to post the plan back onto the PR
+    strategy:
+      fail-fast: false # one environment failing should not hide the other's plan
+      matrix:
+        environment: ${{ fromJSON(needs.setup.outputs.environments) }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Per-environment role and state bucket, falling back to the shared ones. Set
+      # AWS_TF_ROLE_ARN_PROD / TF_STATE_BUCKET_PROD as repo variables the day prod moves into
+      # its own AWS account; nothing else has to change.
+      - name: Resolve AWS config for ${{ matrix.environment }}
+        id: cfg
+        env:
+          VARS: ${{ toJSON(vars) }}
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          set -euo pipefail
+          SUFFIX=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
+          pick() {
+            echo "$VARS" | jq -r --arg k "$1_$SUFFIX" --arg f "$1" '.[$k] // .[$f] // empty'
+          }
+          ROLE=$(pick AWS_TF_ROLE_ARN)
+          BUCKET=$(pick TF_STATE_BUCKET)
+          REGION=$(pick AWS_REGION)
+          for pair in "AWS_TF_ROLE_ARN:$ROLE" "TF_STATE_BUCKET:$BUCKET" "AWS_REGION:$REGION"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::repo variable ${pair%%:*} is not set. Run infra/scripts/bootstrap-aws.sh (stage 0) first."
+              exit 1
+            fi
+          done
+          {
+            echo "role_arn=$ROLE"
+            echo "bucket=$BUCKET"
+            echo "region=$REGION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ steps.cfg.outputs.role_arn }}
+          aws-region: ${{ steps.cfg.outputs.region }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false # keep raw stdout so it can be tee'd to the summary
+
+      - name: Format check
+        run: terraform fmt -check -recursive ../..
+
+      # The state bucket is account-specific and must exist BEFORE Terraform runs (bootstrap
+      # stage 0), so it is injected rather than hardcoded in backend.tf.
+      - name: Init (S3 backend)
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.cfg.outputs.bucket }}" \
+            -backend-config="region=${{ steps.cfg.outputs.region }}"
+
+      - name: Validate
+        run: terraform validate
+
+      # Both variants write the SAME artifact name (tfplan), so the apply job downstream runs
+      # exactly what was reviewed here.
+      - name: Plan
+        id: plan
+        env:
+          ACTION: ${{ needs.setup.outputs.action }}
+        run: |
+          set -o pipefail
+          if [ "$ACTION" = "destroy" ]; then
+            terraform plan -destroy -input=false -no-color -out=tfplan | tee plan.txt
+          else
+            terraform plan -input=false -no-color -out=tfplan | tee plan.txt
+          fi
+
+      # The saved plan is what makes "review then apply" real rather than aspirational. It can
+      # contain resource attribute values, so retention is deliberately short; artifacts are
+      # readable by anyone who can read the repo.
+      - name: Upload the plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.run_id }}
+          path: |
+            surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/${{ matrix.environment }}/tfplan
+            surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/${{ matrix.environment }}/plan.txt
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Render the plan on the run summary
+        if: always()
+        env:
+          ACTION: ${{ needs.setup.outputs.action }}
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          {
+            echo "## terraform \`$ACTION\` · \`$ENVIRONMENT\`"
+            echo
+            if [ -f plan.txt ]; then
+              HEADLINE=$(grep -E '^(Plan:|No changes|Terraform will perform)' plan.txt | tail -1)
+              echo "**${HEADLINE:-plan produced no summary line}**"
+              echo
+              echo "<details><summary>Full plan output</summary>"
+              echo
+              echo '```terraform'
+              tail -c 200000 plan.txt
+              echo '```'
+              echo "</details>"
+            else
+              echo "_No plan was produced - the run failed before planning._"
+            fi
+            echo
+            echo "Job result: **${{ job.status }}**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Put the plan where the reviewer already is. One comment per environment, updated in
+      # place on every push, so the PR does not fill up with stale plans.
+      - name: Comment the plan on the PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONMENT: ${{ matrix.environment }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [ -f plan.txt ] || { echo "no plan to comment"; exit 0; }
+          MARKER="<!-- terraform-plan:${ENVIRONMENT} -->"
+          HEADLINE=$(grep -E '^(Plan:|No changes|Terraform will perform)' plan.txt | tail -1)
+          {
+            echo "$MARKER"
+            echo "### terraform plan · \`$ENVIRONMENT\`"
+            echo
+            echo "**${HEADLINE:-plan produced no summary line}**"
+            echo
+            echo "<details><summary>Full plan output</summary>"
+            echo
+            echo '```terraform'
+            # GitHub rejects comments over 65536 characters. Keep the tail, which holds the
+            # summary line, and say plainly when anything was dropped.
+            if [ "$(wc -c < plan.txt)" -gt 55000 ]; then
+              echo "[... truncated - see the run summary or the tfplan artifact for the full output ...]"
+            fi
+            tail -c 55000 plan.txt
+            echo '```'
+            echo "</details>"
+            echo
+            echo "_[Run #${{ github.run_number }}]($RUN_URL)_"
+          } > comment.md
+          ID=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                 --jq "map(select(.body | startswith(\"$MARKER\"))) | .[0].id // empty")
+          if [ -n "$ID" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$ID" -F body=@comment.md >/dev/null
+            echo "updated comment $ID"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@comment.md >/dev/null
+            echo "posted a new comment"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Apply (or destroy) the reviewed plan. Referencing a GitHub Environment is what gives prod a
+  # required-reviewer gate: add reviewers under Settings -> Environments -> prod and this job
+  # waits for a human before it touches production.
+  # ---------------------------------------------------------------------------
+  apply:
+    # Deliberately a static name: a name built from `needs` outputs renders as raw ${{ }} text in
+    # the Actions UI whenever the job is skipped. The run title already carries action and
+    # environment.
+    name: apply the reviewed plan
+    needs: [setup, plan]
+    if: needs.setup.outputs.target != ''
+    runs-on: ubuntu-latest
+    environment: ${{ needs.setup.outputs.target }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+        working-directory: surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/${{ needs.setup.outputs.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Resolve AWS config for ${{ needs.setup.outputs.target }}
+        id: cfg
+        env:
+          VARS: ${{ toJSON(vars) }}
+          ENVIRONMENT: ${{ needs.setup.outputs.target }}
+        run: |
+          set -euo pipefail
+          SUFFIX=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
+          pick() {
+            echo "$VARS" | jq -r --arg k "$1_$SUFFIX" --arg f "$1" '.[$k] // .[$f] // empty'
+          }
+          {
+            echo "role_arn=$(pick AWS_TF_ROLE_ARN)"
+            echo "bucket=$(pick TF_STATE_BUCKET)"
+            echo "region=$(pick AWS_REGION)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials (OIDC, no static keys)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ steps.cfg.outputs.role_arn }}
+          aws-region: ${{ steps.cfg.outputs.region }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      # The plan is a binary file tied to the provider and module versions that produced it.
+      # Those are pinned and the lock file is committed, so re-initialising here reproduces the
+      # same set exactly.
+      - name: Download the reviewed plan
+        uses: actions/download-artifact@v8
+        with:
+          name: tfplan-${{ needs.setup.outputs.target }}-${{ github.run_id }}
+          path: surinenijagadeesh/END TO END PROJECT/PixNest/infra/terraform/environments/${{ needs.setup.outputs.target }}
+
+      - name: Init (S3 backend)
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ steps.cfg.outputs.bucket }}" \
+            -backend-config="region=${{ steps.cfg.outputs.region }}"
+
+      # Applying a saved destroy plan is the same operation as `terraform destroy`, just
+      # reviewable first - so teardown runs through the pipeline exactly like the build.
+      - name: Apply
+        run: |
+          set -o pipefail
+          terraform apply -input=false -no-color tfplan | tee apply.txt
+
+      - name: Summary
+        if: always()
+        env:
+          ACTION: ${{ needs.setup.outputs.action }}
+          ENVIRONMENT: ${{ needs.setup.outputs.target }}
+        run: |
+          {
+            echo "## terraform \`$ACTION\` · \`$ENVIRONMENT\` · result: **${{ job.status }}**"
+            echo
+            if [ -f apply.txt ]; then
+              echo "**$(grep -E '^(Apply complete|Destroy complete|Error)' apply.txt | tail -1)**"
+              echo
+              echo "<details><summary>Full output</summary>"
+              echo
+              echo '```terraform'
+              tail -c 200000 apply.txt
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
