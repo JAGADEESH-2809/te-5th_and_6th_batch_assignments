@@ -279,31 +279,30 @@ jobs:
       contents: write # the only job that writes to the repo
     steps:
       - uses: actions/checkout@v7
-      - name: Bump the image tags that were actually pushed
+      -      - name: Bump the image tags that were actually pushed
         run: |
-          CHANGED=""
+          CHANGED_FILES=()
           if [ "${{ needs.changes.outputs.backend }}" = "true" ]; then
-            yq -i '.image.tag = "${{ github.sha }}"' surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml
-            CHANGED="$CHANGED surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
+            yq -i '.image.tag = "${{ github.sha }}"' "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml"
+            CHANGED_FILES+=("surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/backend/values.yaml")
           fi
           if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
-            yq -i '.image.tag = "${{ github.sha }}"' surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml
-            CHANGED="$CHANGED surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
+            yq -i '.image.tag = "${{ github.sha }}"' "surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml"
+            CHANGED_FILES+=("surinenijagadeesh/END TO END PROJECT/PixNest/infra/helm/frontend/values.yaml")
           fi
-          echo "CHANGED_FILES=$CHANGED" >> "$GITHUB_ENV"
+          printf '%s\n' "${CHANGED_FILES[@]}" > changed_files.txt
+
       - name: Commit the bump
         run: |
-          [ -n "$CHANGED_FILES" ] || { echo "nothing to bump"; exit 0; }
-          git config user.name  "ci-bot"
+          [ -s changed_files.txt ] || { echo "nothing to bump"; exit 0; }
+          git config user.name "ci-bot"
           git config user.email "ci-bot@users.noreply.github.com"
-          git add $CHANGED_FILES
-          # [skip ci] so this bump to infra/helm does not trigger another CI run (no loop).
+          while IFS= read -r file; do
+            git add -- "$file"
+          done < changed_files.txt
           git commit -m "ci: deploy ${GITHUB_SHA::7} [skip ci]" || { echo "no changes"; exit 0; }
-          # main may have moved while this run was in flight; rebase and retry so the
-          # deploy commit never silently fails.
           for attempt in 1 2 3; do
             git push && exit 0
             git pull --rebase origin main
           done
           git push
-
