@@ -65,4 +65,3 @@ async def ready():
 @app.get("/version", tags=["meta"])
 def version():
     return {"version": settings.app_version}
-

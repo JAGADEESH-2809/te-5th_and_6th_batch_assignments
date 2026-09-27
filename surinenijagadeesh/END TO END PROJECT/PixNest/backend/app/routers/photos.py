@@ -154,4 +154,3 @@ async def delete_photo(photo_id: str, db: DbSession, user: CurrentUser):
     except Exception:
         logger.exception("S3 delete failed, object orphaned key=%s", key)
     logger.info("photo deleted id=%s", photo_id)
-

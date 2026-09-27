@@ -40,4 +40,3 @@ def make_auth_headers(client, username: str, password: str = "password-123") -> 
 def auth_headers(client):
     """A default signed-in test user."""
     return make_auth_headers(client, "tester")
-

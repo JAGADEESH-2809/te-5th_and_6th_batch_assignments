@@ -56,4 +56,3 @@ async def login(form: LoginForm, db: DbSession):
         )
     logger.info("user logged in username=%s", user.username)
     return Token(access_token=create_access_token(user.username))
-
