@@ -50,7 +50,7 @@ def _presign_client():
     return boto3.client(
         "s3",
         region_name=settings.aws_region,
-        endpoint_url="http://localhost:9000",
+        endpoint_url=settings.s3_endpoint_url,
         config=Config(
             signature_version="s3v4",
             connect_timeout=5,
