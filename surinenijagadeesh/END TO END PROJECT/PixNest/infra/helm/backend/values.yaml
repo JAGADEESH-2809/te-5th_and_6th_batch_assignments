@@ -6,7 +6,7 @@
 fullnameOverride: "" # defaults to pixnest-backend
 image:
   repository: 000000000000.dkr.ecr.ap-south-1.amazonaws.com/pixnest-backend
-  tag: 879b909d599c7737a20706fa033e350c1af3b10c # CI overwrites this with the git commit SHA
+  tag: 921eb329235543dbe64dc1cb2dea14cafba48297 # CI overwrites this with the git commit SHA
   pullPolicy: IfNotPresent
 replicas: 2
 serviceAccount:
